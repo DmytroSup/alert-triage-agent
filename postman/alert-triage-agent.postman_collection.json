@@ -1,0 +1,177 @@
+{
+  "info": {
+    "name": "Alert Triage Agent",
+    "description": "Walk the pipeline end to end: send raw alerts, watch them get classified, then read back the grouped incidents.\n\nRun the requests top to bottom. Requests 2-4 send three alerts about the same host so you can watch them collapse into one incident.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "apiKey", "value": "" },
+    { "key": "incidentId", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "1. Health - alert stats",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/api/alerts/stats", "host": ["{{baseUrl}}"], "path": ["api", "alerts", "stats"] },
+        "description": "Confirms the API is up and the database is reachable. All zeros on a fresh stack."
+      }
+    },
+    {
+      "name": "2. Ingest - disk critical on web-01",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('accepted', () => pm.response.to.have.status(202));",
+              "const b = pm.response.json();",
+              "pm.test('not a duplicate', () => pm.expect(b.status).to.eql('accepted'));",
+              "console.log('alert id', b.id, 'fingerprint', b.fingerprint);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "x-api-key", "value": "{{apiKey}}", "disabled": true }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"source\": \"zabbix\",\n  \"payload\": {\n    \"host\": \"web-01\",\n    \"service\": \"checkout\",\n    \"severity\": \"critical\",\n    \"check\": \"DiskSpace\",\n    \"message\": \"disk usage on web-01 exceeded 95%\"\n  }\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/alerts", "host": ["{{baseUrl}}"], "path": ["api", "alerts"] },
+        "description": "First alert. The worker classifies it as infra/P1 and opens a new incident."
+      }
+    },
+    {
+      "name": "3. Ingest - memory warning on web-01",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"source\": \"zabbix\",\n  \"payload\": {\n    \"host\": \"web-01\",\n    \"service\": \"checkout\",\n    \"severity\": \"warning\",\n    \"check\": \"MemoryHigh\",\n    \"message\": \"memory usage elevated on web-01\"\n  }\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/alerts", "host": ["{{baseUrl}}"], "path": ["api", "alerts"] },
+        "description": "Same host, same category. Rule 'same-host-same-category' attaches this to the incident opened by request 2 instead of creating a second one."
+      }
+    },
+    {
+      "name": "4. Ingest - prometheus shape, nested labels",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"source\": \"prometheus\",\n  \"payload\": {\n    \"labels\": {\n      \"instance\": \"web-01\",\n      \"job\": \"checkout\",\n      \"alertname\": \"NodeMemoryHigh\"\n    },\n    \"annotations\": {\n      \"description\": \"node memory pressure on web-01\"\n    },\n    \"severity\": \"warning\",\n    \"startsAt\": \"2026-08-16T10:00:00Z\"\n  }\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/alerts", "host": ["{{baseUrl}}"], "path": ["api", "alerts"] },
+        "description": "A completely different payload shape. The normalizer maps labels.instance to host and annotations.description to message, so it still lands on the same incident."
+      }
+    },
+    {
+      "name": "5. Ingest - security alert, different category",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"source\": \"falco\",\n  \"payload\": {\n    \"host\": \"web-01\",\n    \"severity\": \"critical\",\n    \"rule\": \"PrivEsc\",\n    \"message\": \"unauthorized privilege escalation detected\"\n  }\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/alerts", "host": ["{{baseUrl}}"], "path": ["api", "alerts"] },
+        "description": "Same host but classified as security, so it opens its own incident. This is the check that correlation is not just grouping by hostname."
+      }
+    },
+    {
+      "name": "6. Ingest - duplicate of request 2",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('detected as duplicate', () => pm.expect(b.status).to.eql('duplicate'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"source\": \"zabbix\",\n  \"payload\": {\n    \"host\": \"web-01\",\n    \"service\": \"checkout\",\n    \"severity\": \"critical\",\n    \"check\": \"DiskSpace\",\n    \"message\": \"disk usage on web-01 exceeded 95%\"\n  }\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/api/alerts", "host": ["{{baseUrl}}"], "path": ["api", "alerts"] },
+        "description": "Byte-identical to request 2. Same fingerprint inside the dedup window, so it is dropped and never reaches the worker."
+      }
+    },
+    {
+      "name": "7. Ingest - rejected, missing payload",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": ["pm.test('validation rejects it', () => pm.response.to.have.status(400));"]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"source\": \"broken\"\n}" },
+        "url": { "raw": "{{baseUrl}}/api/alerts", "host": ["{{baseUrl}}"], "path": ["api", "alerts"] },
+        "description": "Expected to fail with 400. Proves the DTO validation pipe is active."
+      }
+    },
+    {
+      "name": "8. Incidents - list, worst first",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const list = pm.response.json();",
+              "pm.test('at least two incidents', () => pm.expect(list.length).to.be.at.least(2));",
+              "if (list.length) pm.collectionVariables.set('incidentId', list[0].id);",
+              "console.log(list.map(i => `${i.severity} ${i.title} (${i.alert_count} alerts)`).join('\\n'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/api/incidents?status=open", "host": ["{{baseUrl}}"], "path": ["api", "incidents"], "query": [{ "key": "status", "value": "open" }] },
+        "description": "Wait 3-5 seconds after the ingests so the worker has drained the queue. You should see roughly two incidents from five alerts."
+      }
+    },
+    {
+      "name": "9. Incidents - one incident with its alerts",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/api/incidents/{{incidentId}}", "host": ["{{baseUrl}}"], "path": ["api", "incidents", "{{incidentId}}"] },
+        "description": "Shows the alerts rolled up into this incident, each with the classification reason the model gave."
+      }
+    },
+    {
+      "name": "10. Incidents - summary counters",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/api/incidents/summary", "host": ["{{baseUrl}}"], "path": ["api", "incidents", "summary"] }
+      }
+    },
+    {
+      "name": "11. Incidents - acknowledge",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ \"status\": \"acknowledged\" }" },
+        "url": { "raw": "{{baseUrl}}/api/incidents/{{incidentId}}/status", "host": ["{{baseUrl}}"], "path": ["api", "incidents", "{{incidentId}}", "status"] }
+      }
+    }
+  ]
+}

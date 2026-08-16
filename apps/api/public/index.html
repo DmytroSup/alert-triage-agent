@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alert Triage Agent</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171b21; --line: #262c35;
+    --text: #e6e9ee; --muted: #8b95a5; --accent: #4f8cff;
+    --p1: #f4564a; --p2: #f0913a; --p3: #e8c33c; --p4: #6b7684;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    border-bottom: 1px solid var(--line); padding: 22px 28px;
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  h1 { font-size: 19px; margin: 0; font-weight: 620; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  main { padding: 22px 28px 60px; max-width: 1100px; }
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+  select, button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 11px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: #3a424e; }
+  .count { color: var(--muted); font-size: 13px; margin-left: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; padding: 0 12px 9px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 13px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.row:hover { background: #14181e; cursor: pointer; }
+  .sev {
+    display: inline-block; min-width: 30px; text-align: center; font-size: 11px;
+    font-weight: 700; padding: 2px 7px; border-radius: 5px; color: #0f1216;
+  }
+  .sev.P1 { background: var(--p1); } .sev.P2 { background: var(--p2); }
+  .sev.P3 { background: var(--p3); } .sev.P4 { background: var(--p4); color: #e6e9ee; }
+  .title { font-weight: 560; }
+  .summary { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .tag {
+    font-size: 11px; color: var(--muted); border: 1px solid var(--line);
+    padding: 1px 7px; border-radius: 20px;
+  }
+  .detail { background: #12161b; }
+  .detail td { padding: 0 12px 16px; }
+  .alert {
+    border-left: 2px solid var(--line); padding: 7px 0 7px 12px;
+    margin-top: 9px; font-size: 13px;
+  }
+  .alert code { color: var(--accent); font-size: 12px; }
+  .reason { color: var(--muted); font-size: 12px; font-style: italic; margin-top: 3px; }
+  .empty { color: var(--muted); padding: 44px 0; text-align: center; }
+  .empty code {
+    display: block; margin-top: 10px; color: var(--accent); font-size: 12.5px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Alert Triage Agent</h1>
+  <span class="sub">raw alerts in, grouped incidents out</span>
+</header>
+
+<main>
+  <div class="bar">
+    <select id="status">
+      <option value="">all statuses</option>
+      <option value="open" selected>open</option>
+      <option value="acknowledged">acknowledged</option>
+      <option value="closed">closed</option>
+    </select>
+    <select id="severity">
+      <option value="">all severities</option>
+      <option>P1</option><option>P2</option><option>P3</option><option>P4</option>
+    </select>
+    <select id="category">
+      <option value="">all categories</option>
+      <option>infra</option><option>security</option>
+      <option>application</option><option>network</option><option>unknown</option>
+    </select>
+    <button id="refresh">refresh</button>
+    <span class="count" id="count"></span>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th style="width:52px">sev</th><th>incident</th>
+          <th style="width:110px">category</th><th style="width:70px">alerts</th>
+          <th style="width:150px">opened</th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <div class="empty" id="empty" hidden>
+    No incidents yet.
+    <code>curl -X POST localhost:3000/api/alerts -H 'content-type: application/json' -d '{"source":"demo","payload":{"host":"web-01","message":"disk usage critical"}}'</code>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ago = (iso) => {
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+};
+
+let expanded = null;
+
+async function load() {
+  const q = new URLSearchParams();
+  for (const f of ['status', 'severity', 'category']) if ($(f).value) q.set(f, $(f).value);
+
+  let incidents = [];
+  try {
+    const res = await fetch('/api/incidents?' + q);
+    incidents = await res.json();
+  } catch (e) {
+    $('count').textContent = 'API unreachable';
+    return;
+  }
+
+  $('count').textContent = incidents.length + ' incident' + (incidents.length === 1 ? '' : 's');
+  $('empty').hidden = incidents.length > 0;
+  $('rows').innerHTML = incidents.map(i => `
+    <tr class="row" data-id="${i.id}">
+      <td><span class="sev ${esc(i.severity)}">${esc(i.severity)}</span></td>
+      <td>
+        <div class="title">${esc(i.title)}</div>
+        ${i.summary ? `<div class="summary">${esc(i.summary)}</div>` : ''}
+      </td>
+      <td><span class="tag">${esc(i.category)}</span></td>
+      <td class="meta">${i.alert_count}</td>
+      <td class="meta">${ago(i.created_at)}</td>
+    </tr>
+    <tr class="detail" id="d${i.id}" hidden><td colspan="5"></td></tr>
+  `).join('');
+
+  document.querySelectorAll('tr.row').forEach(r =>
+    r.addEventListener('click', () => toggle(r.dataset.id)));
+}
+
+async function toggle(id) {
+  const row = $('d' + id);
+  if (!row.hidden) { row.hidden = true; expanded = null; return; }
+  if (expanded) $('d' + expanded).hidden = true;
+
+  const cell = row.firstElementChild;
+  cell.innerHTML = '<div class="meta">loading…</div>';
+  row.hidden = false;
+  expanded = id;
+
+  const data = await (await fetch('/api/incidents/' + id)).json();
+  cell.innerHTML = (data.alerts || []).map(a => `
+    <div class="alert">
+      <code>${esc(a.source)}</code> &middot;
+      ${esc(a.normalized?.message || 'no message')}
+      <div class="reason">${esc(a.severity)} / ${esc(a.category)} &mdash;
+        ${esc(a.classification_reason || 'no reason recorded')}</div>
+    </div>`).join('') || '<div class="meta">no alerts linked</div>';
+}
+
+['status', 'severity', 'category'].forEach(f => $(f).addEventListener('change', load));
+$('refresh').addEventListener('click', load);
+load();
+setInterval(load, 10000);
+</script>
+</body>
+</html>

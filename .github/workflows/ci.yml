@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  worker-tests:
+    name: worker unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run offline pipeline tests
+        working-directory: apps/worker
+        run: python -m unittest discover -s tests -v
+
+  api-build:
+    name: api build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install and build
+        working-directory: apps/api
+        run: |
+          npm install
+          npm run build
+
+  schema:
+    name: schema applies cleanly
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: triage
+          POSTGRES_PASSWORD: triage
+          POSTGRES_DB: triage
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U triage" --health-interval 3s
+          --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply schema and verify correlation rules
+        env:
+          PGPASSWORD: triage
+        run: |
+          psql -h localhost -U triage -d triage -v ON_ERROR_STOP=1 -f db/init/001_schema.sql
+          psql -h localhost -U triage -d triage -v ON_ERROR_STOP=1 -f db/verify_correlation.sql
