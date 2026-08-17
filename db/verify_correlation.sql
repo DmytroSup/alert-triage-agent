@@ -13,12 +13,17 @@ TRUNCATE alert_incident, incidents, alerts RESTART IDENTITY CASCADE;
 
 -- Three alerts from the same host in the same category, plus one from another
 -- host, plus one in a different category on the original host.
+--
+-- `normalized` deliberately has no "category" key - the real normalizer never
+-- sets one, only the classifier does, and category lives in the `category`
+-- column. Baking it into the JSON here would hide the bug where
+-- find_matching_incident() used to read normalized->>'category' (always NULL).
 INSERT INTO alerts (source, fingerprint, raw_payload, normalized, category, severity, status) VALUES
- ('prometheus','fp1','{"host":"web-01"}','{"host":"web-01","service":"checkout","category":"infra"}','infra','P2','classified'),
- ('prometheus','fp2','{"host":"web-01"}','{"host":"web-01","service":"checkout","category":"infra"}','infra','P1','classified'),
- ('zabbix',    'fp3','{"host":"web-01"}','{"host":"web-01","service":"checkout","category":"infra"}','infra','P3','classified'),
- ('prometheus','fp4','{"host":"db-01"}', '{"host":"db-01","service":"orders","category":"infra"}',  'infra','P2','classified'),
- ('falco',     'fp5','{"host":"web-01"}','{"host":"web-01","service":"checkout","category":"security"}','security','P1','classified');
+ ('prometheus','fp1','{"host":"web-01"}','{"host":"web-01","service":"checkout"}','infra','P2','classified'),
+ ('prometheus','fp2','{"host":"web-01"}','{"host":"web-01","service":"checkout"}','infra','P1','classified'),
+ ('zabbix',    'fp3','{"host":"web-01"}','{"host":"web-01","service":"checkout"}','infra','P3','classified'),
+ ('prometheus','fp4','{"host":"db-01"}', '{"host":"db-01","service":"orders"}',  'infra','P2','classified'),
+ ('falco',     'fp5','{"host":"web-01"}','{"host":"web-01","service":"checkout"}','security','P1','classified');
 
 -- Alert 1 opens an incident.
 INSERT INTO incidents (title, summary, category, severity, alert_count)
@@ -41,9 +46,9 @@ BEGIN
          WHERE i.status = 'open'
            AND i.category = (SELECT category FROM alerts WHERE id = a_id)
            AND i.updated_at > now() - (900 || ' seconds')::interval
-           AND (COALESCE(a.normalized->>'category','') || '|' ||
+           AND (a.category::text || '|' ||
                 COALESCE(a.normalized->>'host','')) =
-               (SELECT COALESCE(normalized->>'category','') || '|' ||
+               (SELECT category::text || '|' ||
                        COALESCE(normalized->>'host','') FROM alerts WHERE id = a_id)
          GROUP BY i.id
          ORDER BY i.updated_at DESC

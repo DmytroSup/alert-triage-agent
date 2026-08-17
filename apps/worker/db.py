@@ -101,10 +101,16 @@ def find_matching_incident(
     The key is recomputed in SQL from each alert's normalized JSON so that the
     rule definition stays the single source of truth - change the rule row and
     behaviour changes without a redeploy.
+
+    `category` is not part of the normalized JSON - the normalizer never sets
+    it, only the classifier does - so it has to be read from the `alerts.category`
+    column instead of `normalized->>'category'`, which would always be NULL.
     """
-    key_expr = " || '|' || ".join(
-        f"COALESCE(a.normalized->>'{f}', '')" for f in match_fields
-    )
+    segments = [
+        "a.category::text" if f == "category" else f"COALESCE(a.normalized->>'{f}', '')"
+        for f in match_fields
+    ]
+    key_expr = " || '|' || ".join(segments)
 
     with conn.cursor() as cur:
         cur.execute(

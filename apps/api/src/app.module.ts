@@ -15,7 +15,7 @@ import { IncidentsModule } from './incidents/incidents.module';
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, 'public'),
       serveRoot: '/',
-      exclude: ['/api/{*splat}'],
+      exclude: ['/api/(.*)'],
     }),
     DbModule,
     AlertsModule,
