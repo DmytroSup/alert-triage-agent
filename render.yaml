@@ -1,0 +1,68 @@
+# Render Blueprint - deploys the same three services as docker-compose.yml,
+# using the same Dockerfiles, against a managed Postgres instead of the
+# postgres:16-alpine container.
+#
+# The free plan does not support background workers, so the worker service
+# below is pinned to `starter` ($7/mo). The API and database stay on `free`.
+#
+# Usage: https://dashboard.render.com/blueprints -> New Blueprint Instance ->
+# point at this repo. See docs/DEPLOYMENT.md for the one-time schema-apply
+# step Render can't do automatically (docker-compose mounts db/init/ into
+# /docker-entrypoint-initdb.d; a managed Postgres has no equivalent hook).
+
+databases:
+  - name: alert-triage-db
+    databaseName: triage
+    user: triage
+    plan: free
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: alert-triage-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    healthCheckPath: /api/alerts/stats
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: alert-triage-db
+          property: connectionString
+      - key: PORT
+        value: "3000"
+      - key: DEDUP_WINDOW_SEC
+        value: "300"
+      # Set a value in the Render dashboard to require x-api-key on ingest.
+      # Left unset, the guard stays open, same as the local default.
+      - key: INGEST_API_KEY
+        sync: false
+
+  - type: worker
+    name: alert-triage-worker
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./apps/worker/Dockerfile
+    dockerContext: ./apps/worker
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: alert-triage-db
+          property: connectionString
+      - key: LLM_PROVIDER
+        value: mock
+      - key: WORKER_BATCH_SIZE
+        value: "20"
+      - key: WORKER_POLL_SEC
+        value: "3"
+      - key: LOG_LEVEL
+        value: INFO
+      # Only the variable matching LLM_PROVIDER above is ever read. Fill in
+      # the matching one in the Render dashboard to switch off the mock.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false

@@ -49,6 +49,8 @@ open http://localhost:3000
 
 Within a few seconds the dashboard shows the 60 alerts collapsed into a handful of incidents.
 
+![Dashboard showing seeded alerts grouped into four incidents](docs/images/dashboard.png)
+
 **Without Docker:** start a local PostgreSQL, apply `db/init/001_schema.sql`, then run `npm install && npm run start:dev` in `apps/api` and `pip install -r requirements.txt && python main.py` in `apps/worker`.
 
 ---
@@ -112,6 +114,8 @@ Set `INGEST_API_KEY` and every ingest must carry a matching `x-api-key` header. 
 
 A full walkthrough is in [`docs/TESTING.md`](docs/TESTING.md), including a ready-made Postman collection in [`postman/`](postman/).
 
+All three layers - offline unit tests, correlation SQL against a real database, and the full HTTP pipeline with a live worker - have been run end to end; see [`docs/PROGRESS.md`](docs/PROGRESS.md) for the results.
+
 ```bash
 # Pure-logic tests: normalisation and classification, no database, no network
 cd apps/worker && python -m unittest discover -s tests -v
@@ -139,6 +143,10 @@ Adding a provider means implementing `classify` and `summarize` in `apps/worker/
 
 ---
 
+## Deploying
+
+`render.yaml` deploys the same Dockerfiles to [Render](https://render.com) - a free API service, a free Postgres instance, and a paid ($7/mo) background worker, since Render has no free tier for workers. Walkthrough, cost breakdown and the one manual step (Render can't auto-apply the schema the way `docker compose` does) are in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
 ## Project layout
 
 ```
@@ -147,7 +155,8 @@ apps/worker/    Python: normaliser, classifier, correlator, LLM providers
 db/init/        Schema, applied automatically on first container boot
 db/seed/        Synthetic alert generator that posts through the real API
 postman/        Importable collection walking the whole pipeline
-docs/           Testing guide and development log
+docs/           Testing guide, deployment guide, and development log
+render.yaml     Render Blueprint for a public deployment
 ```
 
 ---
